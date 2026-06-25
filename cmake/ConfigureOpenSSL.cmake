@@ -37,12 +37,7 @@ endfunction()
 
 function(parse_makefile FILE KEY VALUES)
     if(NOT EXISTS "${FILE}")
-        message(FATAL_ERROR
-            "OpenSSL Makefile was not found.\n"
-            "  expected file: ${FILE}\n"
-            "  requested key: ${KEY}\n"
-            "Configure may have failed or the build directory may be stale."
-        )
+        message(FATAL_ERROR "Couldn't find Makefile")
     endif()
 
     file(READ ${FILE} MAKEFILE)
@@ -71,21 +66,12 @@ endfunction()
 
 function(apply_ccache FILE)
     if(NOT EXISTS "${FILE}")
-        message(FATAL_ERROR
-            "Cannot apply ccache because the OpenSSL Makefile was not found.\n"
-            "  expected file: ${FILE}"
-        )
+        message(FATAL_ERROR "Couldn't find Makefile")
     endif()
 
-    if(OPENSSL_USE_CCACHE)
-        find_program(CCACHE ccache)
-
-        if(NOT CCACHE)
-            return()
-        endif()
-
+    if(USE_CCACHE)
         file(READ ${FILE} MAKEFILE)
-        string(REPLACE "\nCC=" "\nCC=ccache " MAKEFILE "${MAKEFILE}")
+        string(REPLACE "\nCC=" "\nCC=${CCACHE_BINARY} " MAKEFILE "${MAKEFILE}")
 
         if(MSVC)
             string(REPLACE "/Zi /Fdossl_static.pdb " "" MAKEFILE "${MAKEFILE}")
@@ -106,8 +92,7 @@ function(configure_openssl)
         ${ARGN}
     )
 
-    message(STATUS "Configuring OpenSSL")
-    list(APPEND CMAKE_MESSAGE_INDENT "  ")
+    message(STATUS "Curruent configure options : ${CONFIGURE_OPTIONS}")
 
     # Find previous configure results
     set(OPENSSL_CONFIGDATA ${CONFIGURE_BUILD_DIR}/configdata.pm CACHE INTERNAL "Results of OpenSSL configuration")
@@ -123,15 +108,9 @@ function(configure_openssl)
     )
 
     if(NOT "${CONFIGURE_OPTIONS_OLD}" STREQUAL "")
-        if(CONFIGURE_OPTIONS STREQUAL CONFIGURE_OPTIONS_OLD)
-            message(STATUS "Configure step skipped: existing results already match the requested options")
-            return()
-        endif()
-
         if(IS_DIRECTORY ${CONFIGURE_BUILD_DIR})
-            message(STATUS "Requested options changed: cleaning the OpenSSL build directory")
-            message(VERBOSE "Previous options: ${CONFIGURE_OPTIONS_OLD}")
-            message(VERBOSE "Build directory: ${CONFIGURE_BUILD_DIR}")
+            message(STATUS "Previous configure options : ${CONFIGURE_OPTIONS_OLD}")
+            message(STATUS "Configure options are changed. Clean build directory")
             file(REMOVE_RECURSE ${CONFIGURE_BUILD_DIR})
         endif()
     endif()
@@ -140,11 +119,9 @@ function(configure_openssl)
         file(MAKE_DIRECTORY ${CONFIGURE_BUILD_DIR})
     endif()
 
+    message(STATUS "Configure OpenSSL")
     find_program(OPENSSL_CONFIGURE_TOOL perl REQUIRED)
     list(APPEND CONFIGURE_COMMAND ${OPENSSL_CONFIGURE_TOOL} ${CONFIGURE_FILE} ${CONFIGURE_OPTIONS})
-    message(VERBOSE "Configure options: ${CONFIGURE_OPTIONS}")
-    message(VERBOSE "Build directory: ${CONFIGURE_BUILD_DIR}")
-    message(VERBOSE "Configure command: ${CONFIGURE_COMMAND}")
 
     if(OPENSSL_CONFIGURE_VERBOSE)
         set(VERBOSE_OPTION "")
@@ -153,7 +130,15 @@ function(configure_openssl)
     endif()
 
     execute_process(
-        COMMAND ${CONFIGURE_COMMAND}
+        COMMAND ${CMAKE_COMMAND} -E env
+            "CFLAGS=${CMAKE_C_FLAGS}"
+            "CXXFLAGS=${CMAKE_CXX_FLAGS}"
+            "LDFLAGS=${CMAKE_CXX_LINK_FLAGS}"
+            "CC=${CMAKE_C_COMPILER}"
+            "CXX=${CMAKE_CXX_COMPILER}"
+            "LD=${EMSCRIPTEN_LINKER}"
+            ${CONFIGURE_COMMAND}
+            "--prefix=${CMAKE_SYSROOT}"
         WORKING_DIRECTORY ${CONFIGURE_BUILD_DIR}
         ${VERBOSE_OPTION}
         COMMAND_ERROR_IS_FATAL ANY
@@ -176,8 +161,6 @@ function(configure_openssl)
         REQUIRED
         NO_DEFAULT_PATH
     )
-    message(VERBOSE "Generated Makefile: ${OPENSSL_MAKEFILE}")
-
     apply_ccache(${OPENSSL_MAKEFILE})
 
     if(WIN32 AND NOT OPENSSL_BUILD_VERBOSE)
